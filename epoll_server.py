@@ -1,6 +1,6 @@
 import socket, select
 import os
-import json
+import bson
 import logging
 import requests
 from multiprocessing import Process, Manager
@@ -13,32 +13,10 @@ WEB_PORT = 8000
 WEB_URL = 'http://localhost:5000'
 
 agent_fd_table={}
-agent_buffer={}
-
 matchingTable={}
 
 
 sEPOLL = select.epoll() # POLL for agent
-
-manager = Manager()
-d = manager.dict()
-
-
-
-'''
-AgentInfo ={'uuid' : 123-1-2312312-,
-            'ip' : 128.0.0.1,
-            }
-'''
-
-'''
-matchingTable ={ 'fd' : {'uuid' : 123123123, 
-                        'agent_ip' : 127.0.0.1,
-                        },
-                 'fd2' : ('uuid' :4566643123,
-                         'agent_ip': 120.0.0.1),
-                }
-'''
 
 
 def  setupSocket():
@@ -51,92 +29,104 @@ def  setupSocket():
     # 클라이언트는 ECONNREFUSED 에러를 받게될 것이
     server_socket.listen(1)
 
-
-    web_server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    web_server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    web_server_socket.bind(HOST_IP, WEB_PORT)
-    web_server_socket.listen(1)
-
-
-    return server_socket , web_server_socket
+    return server_socket
 
 
 
 def convertByte2Dict(msg):
-    return json.loads(msg.decode('utf-8').reploace("'",'"'))
+    return bson.loads(msg.decode('utf-8').reploace("'",'"'))
 
 
 class TCP_Server:
     def __init__(self,fd, _):
+        self.temp_reports = {}
         self.fd = fd
-
+        
 
     def isAttackCommand(self, msg):
-        return "attack_target" or "attack_secu" in msg
+        return msg
 
     def isResultOfAttackOrScan(self,msg):
-        return msg['pkts'] or msg['service_product'] # msg[kts] erro 
+        return "report" or "scan" in msg['type']
+    
+        
        
     
-    def isAgentInfo(self, msg):
-        return msg['uuid'] and msg['ip']
+    #def isAgentInfo(self, msg):
+    #    return msg['uuid'] and msg['ip']
 
     def isScanCommand(self, msg):
-        return msg['type'] == "scan"
+        return "scan" in msg['type']
 
     def setInitConnetion(self,agent_fd, _):
         
-        #agent_fd.setblocking(0)
-        sEPOLL.register(agent_fd.fileno(), select.EPOLLIN) # when EPOLLOUT?
-
-        agent_fd_table[agent_fd.fileno()] = agent_fd
-        agent_buffer[agent_fd.fileno()] ={} #request init
-        matchingTable[agent_fd.fileno()] = {} #matching table setting {agent_fd: {uuid : 123123, ip:1231231}}
+        fd_num = agent_fd.fileno()
+        agent_ip = agent_fd.getpeername()[0]
+        sEPOLL.register(fd_num, select.EPOLLIN) # when EPOLLOUT?
         
+        agent_fd_table[fd_num] = agent_fd
+        
+        matchingTable[agent_ip] = agent_fd  #matching table setting {agent_fd: {} ip:1231231}}
+        
+        sned_data = {'ip':agent_ip}
+        requests.post(WEB_URL+'/agent/add' , json = sned_data)# notify to web
+
     def getAgentUUID(self,fd):
         return matchingTable[fd]['uuid']
 
-    def getAgentFD(self,ip):
+    def getAgentFD(self,ip): #{fd:}
         for total in matchingTable.items():
             for fd , _ in total:
-                if ip == matchingTable[fd]['agent_ip']:
+                if ip == matchingTable[fd]['ip']:
                     return fd
         return None
+    def hasAllPackets(self,idx):
+        try:
+            packet_cnt = len(self.temp_reports[idx])
+        except:
+            return False
+        
+        if packet_cnt == 2:
+            t = {'attck_id':idx}
+            self.temp_reports[idx].update(t)
+            return True
+
+
+    def popItem(msg):
+        msg.pop('type') #remove 'type' key
+        who = msg.pop('who') #sender or recevier
+        attack_id = msg.pop('attack_id')
+        return who, attack_id
 
 
     def processingReceivedMsg(self, msg, fileno):
 
-        if self.isAgentInfo(msg): ### Recv userInfo ( uuid, ip ) like {'uuid':123123,'ip':'128..0.1'}
-            matchingTable[fileno] = msg   
-            requests.post(WEB_URL+'/agent/info',msg) 
+        if msg['type'] == "web": # command received from web
 
+            for contents in msg['command']: 
+                matchingTable[contents['src_ip']].send(contents)
 
-        if self.isScanCommand(msg):
-            srcAgent_fd = self.getAgentFD(msg['src_ip'])
-            agent_fd_table[srcAgent_fd].send(msg)
-
-
-        if self.isAttackCommand(msg): 
-            fd_srcAgent = self.getAgentFD(msg['src_ip'])
-            fd_dstAgent = self.getAgentFD(msg['dst_ip'])
-            agent_fd_table[fd_srcAgent].send(msg)
+        elif msg['type'] == "report": #commnad received from agent
             
-            if msg['type'] == "attack_secu": # If agent vs agent , send defendse
-                #에이전트끼리 서로 공격하는 거면, send를 2번 해줘야하는데,,
-                #애초에 dict으로 attack,defense key를 주는것이,,
-                agent_fd_table[fd_dstAgent].send()
-
-        if self.isResultOfAttackOrScan(msg): # Send attack or scan result
-            logging.info    ("[*]   Send 'Report or Scan Result' to webserver")
+            who, attack_id = self.popItem(msg)
             
-            if msg['pkts']: # if this message included packet, it is report 
-                url = WEB_URL+'/report/'+self.getAgentUUID(fileno) # /report/agent_uuid
+            if who == "target":
+                send_data = {'attack_id':attack_id,'pkts':msg['pkts']}
+                requests.post(WEB_URL+'/report/target', json = send_data)
             else:
-                url = WEB_URL+'/scan-result'
+                self.temp_reports[attack_id].update({who :msg['pkts']})
+
+                if self.hasAllPackets(attack_id):
+                    requests.post(WEB_URL+'/report/pkt',json = self.temp_reports)
+                
             
-            requests.post(url,data=msg)
 
+        elif msg['type'] == "scan": # sedn to webserver
+            url = WEB_URL +'/report/scan' 
+            msg.pop('type')
+            requests.post(url,json = msg)
 
+        
 
     def run(self):
         try:
@@ -152,8 +142,7 @@ class TCP_Server:
                     elif event & select.EPOLLIN: # Recevie Client commands
                         logging.info("[*]   Recevied Data From Agent!")
                         
-                        msg = agent_fd_table[fileno].recv(1024) # Get message from cilent # carriage return remove
-                        msg = convertByte2Dict(msg)
+                        msg = bson.loads(agent_fd_table[fileno].recv(4096)) # Get message from cilent # carriage return remove
                         
                         self.processingReceivedMsg(msg,fileno)
 
@@ -165,9 +154,14 @@ class TCP_Server:
                         sEPOLL.modify(fileno, select.EPOLLIN)
 
                     elif event & select.EPOLLHUP: # connetion close
+                        agent_ip = agent_fd_table[fileno].getpeername()[0]
                         sEPOLL.unregister(fileno)
                         agent_fd_table[fileno].close()
-                        del agent_fd_table[fileno] 
+                        del agent_fd_table[fileno]
+
+                        
+                        send_data = {'ip':agent_ip}
+                        requests.post(WEB_URL+'/agent/del',json = send_data) ###
                 
         finally:
             sEPOLL.unregister(self.fd.fileno())
