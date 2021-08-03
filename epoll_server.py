@@ -4,13 +4,13 @@ import bson
 import logging
 import requests
 from multiprocessing import Process, Manager
-
-
+from collections import defaultdict
+import base64
 ### GLOBAL VARIABLE ###
 HOST_IP = '0.0.0.0'
 AGENT_PORT = 9000
 WEB_PORT = 8000
-WEB_URL = 'http://localhost:5000'
+WEB_URL = 'http://192.168.0.144:5000'
 
 sEPOLL = select.epoll() # POLL for agent
 
@@ -18,42 +18,47 @@ sEPOLL = select.epoll() # POLL for agent
 def setupSocket():
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_socket.bind(HOST_IP, AGENT_PORT)
+    server_socket.bind((HOST_IP, AGENT_PORT))
     server_socket.listen(1)
 
     return server_socket
 
 class TCP_Server:
-    def __init__(self,fd, _):
-        self.temp_reports = {}
+    def __init__(self,fd):
+        self.temp_reports = defaultdict(dict)
         self.fd = fd
         self.agent_fd_table = {}
         self.matchingTable = {}
         
 
-    def setInitConnetion(self,agent_fd, _):
+    def setInitConnetion(self,agent_fd):
         fd_num = agent_fd.fileno()
         agent_ip = agent_fd.getpeername()[0]
 
         sEPOLL.register(fd_num, select.EPOLLIN) 
         self.agent_fd_table[fd_num] = self.matchingTable[agent_ip] = agent_fd
+        print("!", WEB_URL + "/agent/add")
+        try:
+            requests.post(WEB_URL+'/agent/add' , json = {'ip':agent_ip} )# notify to web
+        except Exception as e:
+            print(e)
+            
 
-        requests.post(WEB_URL+'/agent/add' , json = {'ip':agent_ip} )# notify to web
 
 
-    def hasAllPackets(self,idx):
+    def hasAllPackets(self, idx):
         try:
             packet_cnt = len(self.temp_reports[idx])
         except KeyError:
             return False
         
-        if packet_cnt == 2:
-            t = {'attck_id':idx}
-            self.temp_reports[idx].update(t)
+        if packet_cnt == 5:
+            self.temp_reports[idx]['attack_id'] = idx
             return True
+
         return False
 
-    def pop_item(msg):
+    def pop_item(self, msg):
         msg.pop('type') # remove 'type' key
         who = msg.pop('who') # sender or recevier
         attack_id = msg.pop('attack_id')
@@ -68,12 +73,23 @@ class TCP_Server:
     def processingReceivedMsg(self, fileno, msg):
 
         if msg['type'] == "web": # command received from web
-            for contents in msg['command']: 
-                self.matchingTable[contents['src_ip']].send(contents)
+            for contents in msg['command']:
+                print(contents, type(contents))
+                self.matchingTable[contents['src_ip']].send(bson.dumps(contents))
 
         elif msg['type'] == "report": #commnad received from agent
+            send_port = 0
             who, attack_id = self.pop_item(msg)
+            REPORT = self.temp_reports[attack_id]
             
+            if who == "send":
+                send_port = msg.pop('port')
+                REPORT['port'] = send_port
+                REPORT['send_ip'] = self.agent_fd_table[fileno].getpeername()[0]
+
+            elif who == "recv":
+                REPORT['recv_ip'] = self.agent_fd_table[fileno].getpeername()[0]
+
             if who == "target": 
                 #report of target attack
                 send_data = {'attack_id':attack_id,'pkts':msg['pkts']}
@@ -81,10 +97,20 @@ class TCP_Server:
 
             else: 
                 # agent <-> agent ATTACK
-                self.temp_reports[attack_id][who] = msg['pkts']
+                REPORT[who] = list(map(base64.b64encode, msg['pkts']))
+                # self.temp_reports[]               
                 if self.hasAllPackets(attack_id):
+                    print("REPORT: ", REPORT)
+                    REPORT["attack_id"] = attack_id
                     requests.post(WEB_URL+'/report/pkt', json = self.temp_reports[attack_id])
-                    self.temp_reports[attack_id].pop()
+                    msg = {
+                        "type": "unlock",
+                        "port": REPORT['port'],
+                    }
+                    print("UNLOCK", msg)
+                    self.matchingTable[REPORT['send_ip']].send(bson.dumps(msg))
+                    self.matchingTable[REPORT['recv_ip']].send(bson.dumps(msg))
+                    self.temp_reports.pop(attack_id)
 
         elif msg['type'] == "scan": # sedn to webserver
             url = WEB_URL +'/report/scan' 
@@ -100,13 +126,15 @@ class TCP_Server:
     def run(self):
         try:
             while True:
-
-                events = sEPOLL.poll(1)
+                print("[*]  Wait")
+                #events = sEPOLL.poll(1)
+                events = sEPOLL.poll()
                 for fileno, event in events:
 
                     if fileno == self.fd.fileno(): # new user add
                         logging.info("[*]   Connectioned Agent!")
-                        self.setInitConnetion(self.fd.accept())
+                        conn_sock,_ = self.fd.accept()
+                        self.setInitConnetion(conn_sock)
 
                     elif event & select.EPOLLIN: # Recevie Client commands
                         logging.info("[*]   Recevied Data From Agent!")
@@ -138,4 +166,3 @@ if __name__ == "__main__":
    
     tcpServer = TCP_Server(fd_server)
     tcpServer.run()
-
