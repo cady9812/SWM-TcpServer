@@ -108,8 +108,8 @@ class TCP_Server:
                         "port": REPORT['port'],
                     }
                     print("UNLOCK", msg)
-                    self.matchingTable[REPORT['send_ip']].send(bson.dumps(msg))
                     self.matchingTable[REPORT['recv_ip']].send(bson.dumps(msg))
+                    self.matchingTable[REPORT['send_ip']].send(bson.dumps(msg))
                     self.temp_reports.pop(attack_id)
 
         elif msg['type'] == "scan": # sedn to webserver
