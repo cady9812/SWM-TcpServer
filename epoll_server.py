@@ -1,18 +1,22 @@
 import socket, select
 import os
-import bson
+import bson, json
 import logging
 import requests
 from multiprocessing import Process, Manager
 from collections import defaultdict
 import base64
 ### GLOBAL VARIABLE ###
-HOST_IP = '0.0.0.0'
-AGENT_PORT = 9000
-WEB_PORT = 8000
-WEB_URL = 'http://192.168.0.144:5000'
 BUF_SIZE = 0x1000
-TICKET = 0
+LOG = logging.getLogger(__name__)
+
+with open("config.ini") as f:
+    config = json.loads(f.read())
+    WEB_URL = config['WEB_URL']
+    WEB_PORT = config['WEB_PORT']
+    AGENT_PORT = config['AGENT_PORT']
+    HOST_IP = config['HOST_IP']
+
 
 sEPOLL = select.epoll() # POLL for agent
 
@@ -25,6 +29,16 @@ def setupSocket():
 
     return server_socket
 
+def http_request(url, method, debug=True, json=None, data=None):
+    if debug:
+        return
+
+    if method == "GET":
+        requests.get(url)
+    elif method == "POST":
+        requests.post(url, json=json)
+
+
 class TCP_Server:
     def __init__(self,fd):
         self.temp_reports = defaultdict(dict)
@@ -33,18 +47,6 @@ class TCP_Server:
         self.matchingTable = {}
         self.web_table = {}
 
-        self.ticket_to_socket = {}      # unique id 에서 socket 으로의 매핑
-        self.fd_to_ticket = {}          # fd 에서 unique id 로의 매핑
-    
-    def manage_ticket(self, agent_sock, fd_num):
-        global TICKET
-
-        self.ticket_to_socket[TICKET] = agent_sock
-        self.fd_to_ticket[fd_num] = TICKET
-        
-        TICKET += 1
-        return
-
 
     def setInitConnetion(self, agent_sock):
         fd_num = agent_sock.fileno()
@@ -52,13 +54,14 @@ class TCP_Server:
         
         # epoll 이벤트로 등록하기 전에, 일단 introduce 처리
         msg = bson.loads(agent_sock.recv(BUF_SIZE))
-        logging.info(f"{msg} from {agent_ip}")
+
+        LOG.warning(f"{msg} from {agent_ip}")
+
         if not msg['type'] == 'introduce':
-            logging.error(f"Protocol Error - new connection should start with self-introduce")
+            LOG.error(f"Protocol Error - new connection should start with self-introduce")
             return None
         
         sEPOLL.register(fd_num, select.EPOLLIN)
-        self.manage_ticket(agent_sock, fd_num)
 
         client_type = msg['detail']
         if client_type == "web":
@@ -66,9 +69,8 @@ class TCP_Server:
 
         elif client_type == "agent":
             self.agent_fd_table[fd_num] = self.matchingTable[agent_ip] = agent_sock
-            print("!", WEB_URL + "/agent/add")
             try:
-                requests.post(WEB_URL+'/agent/add', json = {'ip':agent_ip} )# notify to web
+                http_request(WEB_URL+'/agent/add', "POST", json = {'ip':agent_ip, 'id': fd_num})
             except Exception as e:
                 print(e)
 
@@ -101,13 +103,13 @@ class TCP_Server:
 
         self.agent_fd_table.pop(fileno).close()
         send_data = {'ip':agent_ip}
-        requests.post(WEB_URL+'/agent/del',json = send_data) 
+        http_request(WEB_URL+'/agent/del', "POST", json=send_data)
 
     def processingReceivedMsg(self, fileno, msg):
-
+        LOG.warning(f"Processing {msg}")
         if msg['type'] == "web": # command received from web
             for contents in msg['command']:
-                print(contents, type(contents))
+                contents['ticket'] = fileno     # scan 결과로 보내줄 fd
                 self.matchingTable[contents['src_ip']].send(bson.dumps(contents))
 
         elif msg['type'] == "report": #commnad received from agent
@@ -126,34 +128,37 @@ class TCP_Server:
             if who == "target": 
                 #report of target attack
                 send_data = {'attack_id':attack_id,'pkts':msg['pkts']}
-                requests.post(WEB_URL+'/report/target', json = send_data)
+                http_request(WEB_URL+'/report/target', "POST", json=send_data)
 
             else: 
                 # agent <-> agent ATTACK
                 REPORT[who] = list(map(base64.b64encode, msg['pkts']))
-                # self.temp_reports[]               
+                # self.temp_reports[]            
                 if self.hasAllPackets(attack_id):
                     print("REPORT: ", REPORT)
                     REPORT["attack_id"] = attack_id
-                    requests.post(WEB_URL+'/report/pkt', json = self.temp_reports[attack_id])
+                    http_request(WEB_URL+'/report/pkt', "POST", json=self.temp_reports[attack_id])
                     msg = {
                         "type": "unlock",
                         "port": REPORT['port'],
                     }
-                    print("UNLOCK", msg)
+                    LOG.warning(f"UNLOCK - {msg}")
                     self.matchingTable[REPORT['recv_ip']].send(bson.dumps(msg))
                     self.matchingTable[REPORT['send_ip']].send(bson.dumps(msg))
                     self.temp_reports.pop(attack_id)
 
         elif msg['type'] == "scan": # send to webserver
-            url = WEB_URL +'/report/scan' 
+            url = WEB_URL +'/report/scan'
             msg.pop('type')
-            requests.post(url, json = msg)
+
+            ticket = msg['ticket']
+            sckt = self.web_table[ticket]
+            LOG.warning(f"[scan][result] send {msg} to {sckt}")
+            sckt.send(bson.dumps(msg))
         
         elif msg['type'] == "agent_list": #웹서버가 에이전트 리스트를 요청할때
             url = WEB_URL +'/agent/list'
-            requests.post(url, json = self.matchingTable)
-
+            http_request(url, "POST", json=self.matchingTable)
 
 
     def run(self):
@@ -165,16 +170,17 @@ class TCP_Server:
                 for fileno, event in events:
 
                     if fileno == self.fd.fileno(): # new user add
-                        logging.info("[*]   Connectioned Agent!")
+                        LOG.warning("[*]   Connectioned Agent!")
                         conn_sock,_ = self.fd.accept()
                         self.setInitConnetion(conn_sock)
 
                     elif event & select.EPOLLIN: # Receive Client commands
-                        logging.info("[*]   Recevied Data From Agent!")
+                        LOG.warning("[*]   Recevied Data From Agent!")
 
                         buf = self.agent_fd_table[fileno].recv(4096)
 
                         if not buf: #remove agent
+                            LOG.warning("[*] Delete Agent")
                             agent_ip = self.agent_fd_table[fileno].getpeername()[0]
                             self.removeAgent(fileno, agent_ip)
                             break
