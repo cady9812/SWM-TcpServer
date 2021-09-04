@@ -187,7 +187,10 @@ class TCP_Server:
 
                         if not buf: #remove agent
                             LOG.warning("[*] Delete Agent")
-                            agent_ip = self.agent_fd_table[fileno].getpeername()[0]
+                            if fileno in self.agent_fd_table:
+                                agent_ip = self.agent_fd_table[fileno].getpeername()[0]
+                            elif fileno in self.web_table:
+                                agent_ip = self.web_table[fileno].getpeername()[0]
                             self.removeAgent(fileno, agent_ip)
                             break
 
