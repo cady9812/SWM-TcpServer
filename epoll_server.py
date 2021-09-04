@@ -177,7 +177,13 @@ class TCP_Server:
                     elif event & select.EPOLLIN: # Receive Client commands
                         LOG.warning("[*]   Recevied Data From Agent!")
 
-                        buf = self.agent_fd_table[fileno].recv(4096)
+                        if fileno in self.agent_fd_table:
+                            buf = self.agent_fd_table[fileno].recv(4096)
+                        elif fileno in self.web_table:
+                            buf = self.web_table[fileno].recv(4096)
+                        else:
+                            print("DEADBEEF")
+                            exit(1)
 
                         if not buf: #remove agent
                             LOG.warning("[*] Delete Agent")
