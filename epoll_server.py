@@ -10,13 +10,10 @@ import base64
 BUF_SIZE = 0x1000
 LOG = logging.getLogger(__name__)
 
-with open("config.ini") as f:
-    config = json.loads(f.read())
-    WEB_URL = config['WEB_URL']
-    WEB_PORT = config['WEB_PORT']
-    AGENT_PORT = config['AGENT_PORT']
-    HOST_IP = config['HOST_IP']
-
+WEB_URL = "http://0.0.0.0:5000"
+WEB_PORT = 5000
+AGENT_PORT = 9000
+HOST_IP = "0.0.0.0"
 
 sEPOLL = select.epoll() # POLL for agent
 
