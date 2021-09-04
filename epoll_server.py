@@ -27,6 +27,7 @@ def setupSocket():
     return server_socket
 
 def http_request(url, method, debug=True, json=None, data=None):
+    print(f"[http_Request] {url} | {method} | {json}")
     if debug:
         return
 
