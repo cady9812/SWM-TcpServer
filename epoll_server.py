@@ -26,7 +26,7 @@ def setupSocket():
 
     return server_socket
 
-def http_request(url, method, debug=True, json=None, data=None):
+def http_request(url, method, debug=False, json=None, data=None):
     print(f"[http_Request] {url} | {method} | {json}")
     if debug:
         return
@@ -64,6 +64,7 @@ class TCP_Server:
         client_type = msg['detail']
         if client_type == "web":
             self.web_table[fd_num] = agent_sock
+            print("WEB->", self.web_table)
 
         elif client_type == "agent":
             self.agent_fd_table[fd_num] = self.matchingTable[agent_ip] = agent_sock
@@ -71,6 +72,7 @@ class TCP_Server:
                 http_request(WEB_URL+'/agent/add', "POST", json = {'ip':agent_ip, 'id': fd_num})
             except Exception as e:
                 print(e)
+            print("AGENT-> ", self.agent_fd_table, self.matchingTable)
 
 
     def hasAllPackets(self, idx):
@@ -108,6 +110,7 @@ class TCP_Server:
         if msg['type'] == "web": # command received from web
             for contents in msg['command']:
                 contents['ticket'] = fileno     # scan 결과로 보내줄 fd
+                LOG.warning(f"Matching Table: {self.matchingTable}")
                 self.matchingTable[contents['src_ip']].send(bson.dumps(contents))
 
         elif msg['type'] == "report": #commnad received from agent
@@ -173,7 +176,7 @@ class TCP_Server:
                         self.setInitConnetion(conn_sock)
 
                     elif event & select.EPOLLIN: # Receive Client commands
-                        LOG.warning("[*]   Recevied Data From Agent!")
+                        LOG.warning(f"[*]   Recevied Data From Agent! - {fileno}")
 
                         if fileno in self.agent_fd_table:
                             buf = self.agent_fd_table[fileno].recv(4096)
@@ -182,6 +185,8 @@ class TCP_Server:
                         else:
                             print("DEADBEEF")
                             exit(1)
+
+                        LOG.warning(f">>>> {buf} <<<<")
 
                         if not buf: #remove agent
                             LOG.warning("[*] Delete Agent")
