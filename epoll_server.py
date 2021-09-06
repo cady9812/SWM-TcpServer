@@ -7,72 +7,86 @@ from multiprocessing import Process, Manager
 from collections import defaultdict
 import base64
 ### GLOBAL VARIABLE ###
+import config, log_config
 BUF_SIZE = 0x1000
-LOG = logging.getLogger(__name__)
+WEB_URL = config.WEB_URL
+AGENT_PORT = config.AGENT_PORT
+MY_IP = config.MY_IP
+DEBUG = True
 
-WEB_URL = "http://0.0.0.0:5000"
-WEB_PORT = 5000
-AGENT_PORT = 9000
-HOST_IP = "0.0.0.0"
+# For colored logging
+END = "\033[0m"
+YELLOW = "\033[33m"
+MAGENT = "\033[35m"
+GREEN = "\033[32m"
+BLUE = "\033[34m"
+CYAN = "\033[36m"
+RED = "\033[31m"
 
+logger = log_config.get_custom_logger(__name__)
 sEPOLL = select.epoll() # POLL for agent
 
 
 def setupSocket():
+    logger.info("Setting up socket...")
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_socket.bind((HOST_IP, AGENT_PORT))
+    server_socket.bind((MY_IP, AGENT_PORT))
     server_socket.listen(1)
 
     return server_socket
 
-def http_request(url, method, debug=False, json=None, data=None):
-    print(f"[http_Request] {url} | {method} | {json}")
+
+def http_request(url, method, debug=DEBUG, json=None, data=None):
     if debug:
+        print(f"[http_Request] Debugging Mode")
         return
 
-    if method == "GET":
-        requests.get(url)
-    elif method == "POST":
-        requests.post(url, json=json)
-
+    print(f"[http_Request] {url} | {method} | {json}")
+    try:
+        if method == "GET":
+            requests.get(url)
+        elif method == "POST":
+            requests.post(url, json=json)
+    except:
+        logger.error(f"http_Request fail")
+        
 
 class TCP_Server:
     def __init__(self,fd):
         self.temp_reports = defaultdict(dict)
         self.fd = fd
         self.agent_fd_table = {}
-        self.matchingTable = {}
+        self.ip_to_sock = {}
         self.web_table = {}
 
 
     def setInitConnetion(self, agent_sock):
         fd_num = agent_sock.fileno()
         agent_ip = agent_sock.getpeername()[0]
+        logger.debug(f"fd: {fd_num} / ip: {agent_ip}")
         
         # epoll 이벤트로 등록하기 전에, 일단 introduce 처리
         msg = bson.loads(agent_sock.recv(BUF_SIZE))
-
-        LOG.warning(f"{msg} from {agent_ip}")
+        logger.info(f"[introduce] {msg}")
 
         if not msg['type'] == 'introduce':
-            LOG.error(f"Protocol Error - new connection should start with self-introduce")
+            logger.error(f"Protocol Error - new connection should start with self-introduce")
             return None
         
         sEPOLL.register(fd_num, select.EPOLLIN)
 
         client_type = msg['detail']
+
         if client_type == "web":
             self.web_table[fd_num] = agent_sock
-            print("WEB->", self.web_table)
+            logger.debug(f"{BLUE}WEB TABLE ==> {self.web_table}{END}")
 
         elif client_type == "agent":
-            self.agent_fd_table[fd_num] = self.matchingTable[agent_ip] = agent_sock
-            try:
-                http_request(WEB_URL+'/agent/add', "POST", json = {'ip':agent_ip, 'id': fd_num})
-            except Exception as e:
-                print(e)
-            print("AGENT-> ", self.agent_fd_table, self.matchingTable)
+            self.agent_fd_table[fd_num] = self.ip_to_sock[agent_ip] = agent_sock
+            http_request(WEB_URL+'/agent/add', "POST", json = {'ip':agent_ip, 'id': fd_num})
+            
+            logger.debug(f"{BLUE}AGENT ==> {self.agent_fd_table} {self.ip_to_sock}{END}")
 
 
     def hasAllPackets(self, idx):
@@ -87,33 +101,47 @@ class TCP_Server:
 
         return False
 
+
     def pop_item(self, msg):
         msg.pop('type') # remove 'type' key
         who = msg.pop('who') # sender or recevier
         attack_id = msg.pop('attack_id')
         return who, attack_id
 
-    def removeAgent(self,fileno, agent_ip):
+
+    def removeAgent(self, fileno):
+        if fileno in self.agent_fd_table:
+            agent_ip = self.agent_fd_table[fileno].getpeername()[0]
+        elif fileno in self.web_table:
+            agent_ip = self.web_table[fileno].getpeername()[0]
+
+        logger.debug(f"Trying to remove agent {fileno} {agent_ip}")
         sEPOLL.unregister(fileno)
 
         # web 의 fd라면 그냥 끝
         if fileno in self.web_table:
             self.web_table.pop(fileno)
-            return
+        
+        else:
+            self.agent_fd_table.pop(fileno).close()
+            self.ip_to_sock.pop(agent_ip).close()
+            data = {'ip':agent_ip}
+            http_request(WEB_URL+'/agent/del', "POST", json=data)
 
-        self.agent_fd_table.pop(fileno).close()
-        send_data = {'ip':agent_ip}
-        http_request(WEB_URL+'/agent/del', "POST", json=send_data)
+        return
+
 
     def processingReceivedMsg(self, fileno, msg):
-        LOG.warning(f"Processing {msg}")
+        logger.debug(f"Processing {msg}")
         if msg['type'] == "web": # command received from web
+            logger.debug(f"type web")
             for contents in msg['command']:
                 contents['ticket'] = fileno     # scan 결과로 보내줄 fd
-                LOG.warning(f"Matching Table: {self.matchingTable}")
-                self.matchingTable[contents['src_ip']].send(bson.dumps(contents))
+                logger.info(f"IP->SOCK mapping: {self.ip_to_sock}")
+                self.ip_to_sock[contents['src_ip']].send(bson.dumps(contents))
 
         elif msg['type'] == "report": #commnad received from agent
+            logger.debug(f"type report")
             send_port = 0
             who, attack_id = self.pop_item(msg)
             REPORT = self.temp_reports[attack_id]
@@ -126,12 +154,12 @@ class TCP_Server:
             elif who == "recv":
                 REPORT['recv_ip'] = self.agent_fd_table[fileno].getpeername()[0]
 
-            if who == "target": 
+            if who == "target":
                 #report of target attack
                 send_data = {'attack_id':attack_id,'pkts':msg['pkts']}
                 http_request(WEB_URL+'/report/target', "POST", json=send_data)
 
-            else: 
+            else:
                 # agent <-> agent ATTACK
                 REPORT[who] = list(map(base64.b64encode, msg['pkts']))
                 # self.temp_reports[]            
@@ -143,69 +171,66 @@ class TCP_Server:
                         "type": "unlock",
                         "port": REPORT['port'],
                     }
-                    LOG.warning(f"UNLOCK - {msg}")
-                    self.matchingTable[REPORT['recv_ip']].send(bson.dumps(msg))
-                    self.matchingTable[REPORT['send_ip']].send(bson.dumps(msg))
+                    logger.warning(f"UNLOCK - {msg}")
+                    self.ip_to_sock[REPORT['recv_ip']].send(bson.dumps(msg))
+                    self.ip_to_sock[REPORT['send_ip']].send(bson.dumps(msg))
                     self.temp_reports.pop(attack_id)
 
         elif msg['type'] == "scan": # send to webserver
+            logger.debug(f"type scan")
             url = WEB_URL +'/report/scan'
             msg.pop('type')
 
             ticket = msg['ticket']
             sckt = self.web_table[ticket]
-            LOG.warning(f"[scan][result] send {msg} to {sckt}")
+            logger.warning(f"[scan][result] send {msg} to {sckt}")
             sckt.send(bson.dumps(msg))
         
         elif msg['type'] == "agent_list": #웹서버가 에이전트 리스트를 요청할때
+            logger.debug(f"type agent_list")
             url = WEB_URL +'/agent/list'
-            http_request(url, "POST", json=self.matchingTable)
+            http_request(url, "POST", json=self.ip_to_sock)
 
 
     def run(self):
         try:
             while True:
-                print("[*]  Wait")
-                #events = sEPOLL.poll(1)
+                logger.debug(f"{YELLOW}Waiting for new connection...{END}")
                 events = sEPOLL.poll()
                 for fileno, event in events:
 
                     if fileno == self.fd.fileno(): # new user add
-                        LOG.warning("[*]   Connectioned Agent!")
+                        logger.info(f"{MAGENT}Connectioned Agent!{END}")
                         conn_sock,_ = self.fd.accept()
                         self.setInitConnetion(conn_sock)
 
                     elif event & select.EPOLLIN: # Receive Client commands
-                        LOG.warning(f"[*]   Recevied Data From Agent! - {fileno}")
-
+                        logger.debug("EVENT TRIGGERED")
                         if fileno in self.agent_fd_table:
-                            buf = self.agent_fd_table[fileno].recv(4096)
+                            sock = self.agent_fd_table[fileno]
                         elif fileno in self.web_table:
-                            buf = self.web_table[fileno].recv(4096)
+                            sock = self.web_table[fileno]
                         else:
-                            print("DEADBEEF")
+                            logger.fatal("DEADBEEF")
                             exit(1)
 
-                        LOG.warning(f">>>> {buf} <<<<")
-
+                        buf = sock.recv(4096)
                         if not buf: #remove agent
-                            LOG.warning("[*] Delete Agent")
-                            if fileno in self.agent_fd_table:
-                                agent_ip = self.agent_fd_table[fileno].getpeername()[0]
-                            elif fileno in self.web_table:
-                                agent_ip = self.web_table[fileno].getpeername()[0]
-                            self.removeAgent(fileno, agent_ip)
+                            logger.info(f"{RED}Delete Agent: {fileno}{END}")
+                            self.removeAgent(fileno)
                             break
 
                         msg = bson.loads(buf)
+                        logger.info(f"Recevied Data From {fileno}: {msg}")
                         self.processingReceivedMsg(fileno, msg)
 
-                        
+
                     elif event & select.EPOLLOUT:
+                        logger.debug("???????????")
                         sEPOLL.modify(fileno, select.EPOLLIN)
-                    
-                
+
         finally:
+            logger.debug(f"{MAGENT}Bye Bye~{END}")
             sEPOLL.unregister(self.fd.fileno())
             sEPOLL.close()
             self.fd.close()
