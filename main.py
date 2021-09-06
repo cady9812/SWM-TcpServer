@@ -38,7 +38,7 @@ def setupSocket():
     return server_socket
 
 
-def http_request(url, method, debug=DEBUG, json=None, data=None):
+def http_request(url, method, debug=DEBUG, json=None):
     if debug:
         print(f"[http_Request] Debugging Mode")
         return
@@ -191,6 +191,11 @@ class TCP_Server:
             logger.debug(f"type agent_list")
             url = WEB_URL +'/agent/list'
             http_request(url, "POST", json=self.ip_to_sock)
+
+        elif msg['type'] == 'malware':
+            logger.debug(f"type malware")
+            url = WEB_URL + "/report/malware"
+            http_request(url, "POST", json=msg)
 
         else:
             logger.warning(f"{RED}Not implemented{END}")
