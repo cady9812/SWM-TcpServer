@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import socket, select
 import os
 import bson, json
@@ -191,6 +192,8 @@ class TCP_Server:
             url = WEB_URL +'/agent/list'
             http_request(url, "POST", json=self.ip_to_sock)
 
+        else:
+            logger.warning(f"{RED}Not implemented{END}")
 
     def run(self):
         try:
