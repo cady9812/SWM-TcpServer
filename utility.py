@@ -27,7 +27,7 @@ def get_ip_from_sock(sock: socket.socket):
 
 
 def setup_socket():
-    logger.info("Setting up socket...")
+    logger.info(f"{YELLOW}Setting up socket... {MY_IP}:{AGENT_PORT}{END}")
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_socket.bind((MY_IP, AGENT_PORT))
