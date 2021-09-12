@@ -19,6 +19,7 @@ class WebPool(object):
         fd = sock.fileno()
         ip = sock.getpeername()[0]
         logger.info(f"{CYAN}Hello Web, {fd}:{ip}{END}")
+        self.webs[fd] = sock
         return
 
     def has(self, fd: int):

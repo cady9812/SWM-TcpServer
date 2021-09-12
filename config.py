@@ -3,7 +3,7 @@ AGENT_PORT = 9000
 WEB_PORT = 5000
 WEB_URL = "http://172.17.0.2:5000"
 TCP_LOG_PORT = 5003 # TODO
-DEBUG = True
+DEBUG = False
 
 # For colored logging
 END = "\033[0m"
