@@ -42,5 +42,5 @@ class ReportPool(object):
 
     def delete_all(self, fd):
         if fd in self.reports:
-            logger.debug("Not reachable")
+            # logger.debug("Not reachable")
             self.reports.pop(fd)

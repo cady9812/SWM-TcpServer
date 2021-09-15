@@ -39,3 +39,17 @@ def send_report(sock: socket.socket, report: dict):
     logger.info(f"{GREEN}Send {report} to {sock}{END}")
     data = bson.dumps(report)
     sock.send(data)
+    sock.close()    # End Of Report
+
+
+def recv_data(sckt):
+    result = b''
+    BUF_SIZE = 4096
+    while True:
+        tmp = sckt.recv(BUF_SIZE)
+        if not tmp:
+            break
+        result += tmp
+    
+    print(len(result))
+    return result

