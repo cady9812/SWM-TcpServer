@@ -35,7 +35,8 @@ class RelayServer(object):
     def set_init_connection(self, sock: socket.socket):
         # epoll 이벤트로 등록하기 전에, 일단 introduce 처리
         fd_num = sock.fileno()
-        msg = bson.loads(sock.recv(BUF_SIZE))
+        buf = utility.recv_data(sock)
+        msg = bson.loads(buf)
         logger.debug(f"[introduce] {msg}")
 
         if not msg['type'] == 'introduce':
