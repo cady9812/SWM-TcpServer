@@ -46,18 +46,21 @@ def send_report(sock: socket.socket, report: dict):
     logger.info(f"{GREEN}Send {report} to {sock}{END}")
     data = bson.dumps(report)
     payload = append_size(data)
-    sock.send(payload)
+    sock.sendall(payload)
     sock.close()    # End Of Report
 
 
 def recv_data(sckt):
     result = b''
+    total_length = u32(sckt.recv(4))
     BUF_SIZE = 4096
     while True:
         tmp = sckt.recv(BUF_SIZE)
         if not tmp:
             break
         result += tmp
+        if total_length == len(result):
+            break
     
-    print(len(result))
+    assert total_length == len(result)
     return result
