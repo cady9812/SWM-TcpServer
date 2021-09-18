@@ -52,7 +52,10 @@ def send_report(sock: socket.socket, report: dict):
 
 def recv_data(sckt):
     result = b''
-    total_length = u32(sckt.recv(4))
+    length = sckt.recv(4)
+    if not length:
+        return length
+    total_length = u32(length)
     BUF_SIZE = 4096
     while True:
         tmp = sckt.recv(BUF_SIZE)
