@@ -47,7 +47,7 @@ def send_report(sock: socket.socket, report: dict):
     data = bson.dumps(report)
     payload = append_size(data)
     sock.sendall(payload)
-    sock.close()    # End Of Report
+    # sock.close()    # End Of Report # 두 개 이상의 cmd 가 왔다면, 여러 개의 리포트를 보내야 함
 
 
 def recv_data(sckt):
