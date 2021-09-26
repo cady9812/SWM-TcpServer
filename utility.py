@@ -54,7 +54,7 @@ def recv_data(sckt):
     result = b''
     length = sckt.recv(4)
     if not length:
-        return length
+        return length #???
     total_length = u32(length)
     BUF_SIZE = 4096
     while True:

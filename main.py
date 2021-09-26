@@ -83,7 +83,7 @@ class RelayServer(object):
 
     def process_commands(self, fd, msg):
         logger.debug(f"{GREEN}Processing - {fd}{END} / {msg}")
-        cmd_type = msg.pop('type')
+        cmd_type = msg['type']
 
         # 웹에서 날라온 명령
         if cmd_type == "web": # command received from web
