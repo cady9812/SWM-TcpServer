@@ -1,7 +1,7 @@
 MY_IP = "0.0.0.0"
 AGENT_PORT = 9000
 WEB_PORT = 5000
-WEB_URL = "http://172.17.0.2:5000"
+WEB_URL = "http://localhost:5000"
 TCP_LOG_PORT = 5003 # TODO
 DEBUG = False
 
